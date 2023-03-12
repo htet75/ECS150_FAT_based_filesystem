@@ -135,7 +135,7 @@ int fs_mount(const char *diskname)
 
 	for(uint8_t i = 1; i < sb.total_FAT_blocks; i++)
 	{
-		if(block_read(i, &fat_table-1+i) == -1)
+		if(block_read(i, &fat_table + (i-1)*BLOCK_SIZE) == -1)
 		{
 			free(fat_table);
 			return -1;

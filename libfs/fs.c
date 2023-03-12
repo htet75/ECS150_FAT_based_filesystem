@@ -124,6 +124,7 @@ int fs_mount(const char *diskname)
 {
 	/* TODO: Phase 1 */
 	/* Opening virtual disk file */
+	printf("mounting: %s\n", diskname);
 	if (block_disk_open(diskname) == -1)
 		return -1;
 
@@ -168,13 +169,14 @@ int fs_mount(const char *diskname)
 	}
 
 	fs_mounted == 1;
-
+	printf("mounting exiting!\n");
 	return 0;
 }
 
 int fs_umount(void)
 {
 	/* checking if the file system is mounted*/
+	printf("unmounting starting\n");
 	if (fs_mounted == 0)
 		return -1;
 
@@ -201,11 +203,14 @@ int fs_umount(void)
 
 	fs_mounted = 0;
 
+	printf("unmounting finished\n");
+
 	return block_disk_close();
 }
 
 int fs_info(void)
 {
+	printf("starting fs_info\n");
 	if(fs_mounted == 0)
 	{
 		//no disk mounted
@@ -225,14 +230,15 @@ int fs_info(void)
 		if (FAT[i] == 0)
 			fat_free++;
 	}
-	printf("fat_free_ratio=%zu\%\n", (uint16_t)fat_free / sb.total_data_blocks);
+	printf("fat_free_ratio=%zu%%", (size_t)fat_free * 100 / sb.total_data_blocks);
+	printf("\n");
 	int root_free = 0;
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++)
 	{
 		if (root_dir.root_dir_entries[i].filename[0] == '\0')
 			root_free++;
 	}
-	printf("rdir_free_ratio=%d\%\n", root_free / FS_FILE_MAX_COUNT);
+	printf("rdir_free_ratio=%d%%\n", root_free / FS_FILE_MAX_COUNT);
 	return 0;
 }
 

@@ -290,16 +290,9 @@ int fs_create(const char *filename)
 
 int fs_delete(const char *filename)
 {
-	/* TODO: Phase 2 */
-
-	// if file @filename is currently open
-
-	/*
-	array[FS_FILE_MAX_COUNT] = malloc(0)
-	fs_open -> file descriptor number
-	open -> array[i] = 1
-
-	*/
+	// TODO: if file @filename is currently open
+	// Loop through fd_table for filename
+	// If loop passes through, file is not open
 
 	if (fs_mounted == 0)
 		return -1;

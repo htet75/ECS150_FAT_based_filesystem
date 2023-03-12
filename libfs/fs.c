@@ -106,11 +106,17 @@ struct fd_table
 	int total_opened;
 };
 
+struct root_directory
+{
+	struct root_dir_entry root_dir_entries[FS_FILE_MAX_COUNT];
+	int total_opened;
+};
+
 /* Global variables to used in the file system */
 static int fs_mounted = 0;
 static struct superblock sb; // superblock of the mounter file system
 static struct fd_table fd_table;
-struct root_dir_entry root_dir[FS_FILE_MAX_COUNT]; // root directory of the mounter file system
+struct root_directory root_dir;
 
 /* TODO: Phase 1 */
 
@@ -155,7 +161,7 @@ int fs_mount(const char *diskname)
 	}
 
 	/* Read the root direcory from disk */
-	if (block_read(sb.root_dir_index, root_dir) == -1)
+	if (block_read(sb.root_dir_index, root_dir.root_dir_entries) == -1)
 	{
 		free(FAT);
 		return -1;
@@ -168,10 +174,15 @@ int fs_mount(const char *diskname)
 
 int fs_umount(void)
 {
-	/* TODO: Phase 1 */
 	/* checking if the file system is mounted*/
 	if (fs_mounted == 0)
 		return -1;
+
+	if(fd_table.total_opened > 0)
+	{
+		//still open fd
+		return -1;
+	}
 
 	/* Rewriting Superblock back to disk */
 	if (block_write(0, &sb) == -1)
@@ -185,7 +196,7 @@ int fs_umount(void)
 		if (block_write(i, &FAT + (i - 1) * BLOCK_SIZE) == -1)
 			return -1;
 	}
-	if (block_write(sb.root_dir_index, root_dir) == -1)
+	if (block_write(sb.root_dir_index, root_dir.root_dir_entries) == -1)
 		return -1;
 
 	fs_mounted = 0;
@@ -195,6 +206,12 @@ int fs_umount(void)
 
 int fs_info(void)
 {
+	if(fs_mounted == 0)
+	{
+		//no disk mounted
+		return -1;
+	}
+
 	printf("FS Info:\n"
 		   "total_blk_count=%d\n"
 		   "fat_blk_count=%d\n"
@@ -212,10 +229,11 @@ int fs_info(void)
 	int root_free = 0;
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++)
 	{
-		if (root_dir[i].filename[0] == '\0')
+		if (root_dir.root_dir_entries[i].filename[0] == '\0')
 			root_free++;
 	}
 	printf("rdir_free_ratio=%d\%\n", root_free / FS_FILE_MAX_COUNT);
+	return 0;
 }
 
 int fs_create(const char *filename)
@@ -234,17 +252,22 @@ int fs_create(const char *filename)
 		// filename too long
 		return -1;
 	}
+	if(root_dir.total_opened == FS_FILE_MAX_COUNT)
+	{
+		//max files created
+		return -1;
+	}
 
 	int freeEntry = -1;							// keep track of the first freeEntry in the directory
 	int pollingFlag = 1;						// flag to determine whether or not we're still looking for a freeEntry
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++) // Purpose: check if filename already exists but also find first free entry
 	{
-		if (root_dir[i].filename[0] == '\0' && pollingFlag) // if we found a freeEntry
+		if (root_dir.root_dir_entries[i].filename[0] == '\0' && pollingFlag) // if we found a freeEntry
 		{
 			freeEntry = i;	 // take the index
 			pollingFlag = 0; // no longer polling for freeEntry
 		}
-		if (strcmp((char *)root_dir[i].filename, filename) == 0)
+		if (strcmp((char *)root_dir.root_dir_entries[i].filename, filename) == 0)
 		{
 			// file already exists within directory
 			return -1;
@@ -257,11 +280,11 @@ int fs_create(const char *filename)
 	}
 	else
 	{
-		memcpy(root_dir[freeEntry].filename, filename, FS_FILENAME_LEN);
-		root_dir[freeEntry].size = 0;
-		root_dir[freeEntry].first_datablock_index = FAT_EOC;
+		memcpy(root_dir.root_dir_entries[freeEntry].filename, filename, FS_FILENAME_LEN);
+		root_dir.root_dir_entries[freeEntry].size = 0;
+		root_dir.root_dir_entries[freeEntry].first_datablock_index = FAT_EOC;
 	}
-
+	root_dir.total_opened++;
 	return 0;
 }
 
@@ -288,19 +311,19 @@ int fs_delete(const char *filename)
 	}
 
 	int i = 0;
-	while (strcmp(root_dir[i].filename, filename) != 0 && i <= FS_FILE_MAX_COUNT)
+	while (strcmp(root_dir.root_dir_entries[i].filename, filename) != 0 && i <= FS_FILE_MAX_COUNT)
 		i++;
 	if (i > FS_FILE_MAX_COUNT - 1)
 	{
 		// File not found
 		return -1;
 	}
-	uint16_t index = root_dir[i].first_datablock_index;
-	root_dir[i].filename[0] = '\0';
-	root_dir[i].size = 0;
-	root_dir[i].first_datablock_index = FAT_EOC;
+	uint16_t index = root_dir.root_dir_entries[i].first_datablock_index;
+	root_dir.root_dir_entries[i].filename[0] = '\0';
+	root_dir.root_dir_entries[i].size = 0;
+	root_dir.root_dir_entries[i].first_datablock_index = FAT_EOC;
 
-	block_write(sb.root_dir_index, root_dir);
+	block_write(sb.root_dir_index, root_dir.root_dir_entries);
 
 	// clear FAT chain
 	while (index != FAT_EOC)
@@ -309,6 +332,7 @@ int fs_delete(const char *filename)
 		FAT[index] = 0;
 		index = next;
 	}
+	root_dir.total_opened--;
 	return 0;
 }
 
@@ -323,8 +347,8 @@ int fs_ls(void)
 	printf("FS ls:");
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++)
 	{
-		if (root_dir[i].filename[0] != '\0')
-			printf("file: %s, size: %d, data_blk: %d\n", root_dir[i].filename, root_dir[i].size, root_dir[i].first_datablock_index);
+		if (root_dir.root_dir_entries[i].filename[0] != '\0')
+			printf("file: %s, size: %d, data_blk: %d\n", root_dir.root_dir_entries[i].filename, root_dir.root_dir_entries[i].size, root_dir.root_dir_entries[i].first_datablock_index);
 	}
 	return 0;
 }
@@ -351,7 +375,7 @@ int fs_open(const char *filename) // do we not have to check if the file is alre
 	}
 	/*Find whether the file exists*/
 	int i = 0;
-	while (strcmp(root_dir[i].filename, filename) != 0 && i < FS_FILE_MAX_COUNT)
+	while (strcmp(root_dir.root_dir_entries[i].filename, filename) != 0 && i < FS_FILE_MAX_COUNT)
 		i++;
 	if (i == FS_FILE_MAX_COUNT - 1)
 	{
@@ -374,7 +398,7 @@ int fs_close(int fd) //gonna assume its 0 based
 	if (fs_mounted == 0)
 		return -1;
 
-	if(fd > FS_FILE_MAX_COUNT-1 || fd < 0)
+	if(fd > FS_OPEN_MAX_COUNT-1 || fd < 0)
 	{
 		//invalid fd
 		return -1;
@@ -394,7 +418,7 @@ int fs_stat(int fd)
 {
 	if (fs_mounted == 0)
 		return -1;
-	if(fd > FS_FILE_MAX_COUNT-1 || fd < 0)
+	if(fd > FS_OPEN_MAX_COUNT-1 || fd < 0)
 	{
 		//invalid fd
 		return -1;
@@ -404,11 +428,11 @@ int fs_stat(int fd)
 		//file not open
 		return -1;
 	}
-	//shouldn't have to worry about not finding the file due to above
 	int i = 0;
-	while(strcmp(root_dir[i].filename, fd_table.files[fd].filename) != 0)
+	//the file should exist at this point so we don't need to check for missing file
+	while(strcmp(root_dir.root_dir_entries[i].filename, fd_table.files[fd].filename) != 0)
 		i++;
-	return root_dir[i].size;
+	return root_dir.root_dir_entries[i].size;
 }
 
 int fs_lseek(int fd, size_t offset)
@@ -421,6 +445,7 @@ int fs_lseek(int fd, size_t offset)
 		//invalid offset
 		return -1;
 	}
+	//add other error checks if program doesn't terminate upon error
 	if(offset > fs_stat(fd)) //calling fs_stat will run the fd through the error checking in fs_stat
 	{
 		//offset larger than size

@@ -8,13 +8,13 @@
 #include "fs.h"
 
 struct superblock{
-	char signature[8]; // Signarure ( must be equal to "ECS150FS")
+	char signature[8]; // Signature ( must be equal to "ECS150FS")
 	uint16_t total_disk_blocks; // Total amount of blocks of virtual disk
 	uint16_t root_dir_index; // Root directory block index
 	uint16_t data_block_start_index; // Data block start index
-	uint16_t data_block_size; // Amount of data blocks
-	uint8_t FAT_block_size; // Number of blocks for FAT
-	char padding[4079]; // Unused/Padding
+	uint16_t total_data_blocks; // Amount of data blocks
+	uint8_t total_FAT_blocks; // Number of blocks for FAT
+	uint8_t padding[4079]; // Unused/Padding
 }__attribute__((packed));
 
 /*
@@ -115,21 +115,24 @@ int fs_mount(const char *diskname)
 		return -1;
 
 	/* Read the superblock */
-	if (block_read(0, &sb) = -1)
+	if (block_read(0, &sb) == -1)
 		return -1;
 
-	/* Verify the signature and version of the file system */
-	if(strncmp((char*)sb.signature, "ECS150FS", 8) != 0 || sb.version != 0x0001)
-		return -1;
+	/* Verify the signature of the file system */
+	if(strncmp((char*)sb.signature, "ECS150FS", 8) != 0)
+		return -1; //Incorrect signature
 
 	/* verify the size of the virtual disk and the block size */
-	if(block_disk_count() != sb.fs_size || sb.block_size != BLOCK_SIZE)
-		return -1;
+	if(block_disk_count() != sb.total_disk_blocks)
+		return -1; //Currently open disk does not match SB block count
 
 	/* Allocate memory for the FAT table and read it from disk */
-	fat_table = malloc(sb.fat_blocks * BLOCK_SIZE)
+	fat_table = (uint16_t*)malloc(sb.total_data_blocks * sizeof(uint16_t)); //"There are as many entries as data blocks in the disk"
+
 	if(fat_table == NULL)
-		return -1;
+		return -1; //Memory allocation for FAT failed
+
+
 	for(uint32_t i = 0; i < sb.fat_blocks; i++)
 	{
 		if(block_read(sb.fat_start + i, fat_table + i * BLOCK_SIZE) == -1)

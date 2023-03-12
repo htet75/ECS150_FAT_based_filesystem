@@ -128,18 +128,24 @@ int fs_mount(const char *diskname)
 		return -1; //Currently open disk does not match SB block count
 
 	/* Allocate memory for the FAT table and read it from disk */
-	fat_table = (uint16_t*)malloc(sb.total_data_blocks * sizeof(uint16_t)); //"There are as many entries as data blocks in the disk"
+	FAT = (uint16_t*)malloc(sb.total_data_blocks * sizeof(uint16_t)); //"There are as many entries as data blocks in the disk"
 
-	if(fat_table == NULL)
+	if(FAT == NULL)
 		return -1; //Memory allocation for FAT failed
 
 	for(uint8_t i = 1; i < sb.total_FAT_blocks; i++)
 	{
-		if(block_read(i, &fat_table + (i-1)*BLOCK_SIZE) == -1)
+		if(block_read(i, &FAT + (i-1)*BLOCK_SIZE) == -1)
 		{
-			free(fat_table);
+			free(FAT);
 			return -1;
 		}
+	}
+
+	if(FAT[0] != FAT_EOC)
+	{
+		//First entry is not 0xFFFF
+		return -1;
 	}
 
 	/* Read the root direcory from disk */

@@ -78,7 +78,7 @@ uint16_t allocate_block(uint16_t prev_block_index, uint16_t num_blocks_allocated
 
 /* Root Directory data structure */
 struct root_dir_entry {
-	char filename[16];	// Filename ( including NULL character )
+	char filename[FS_FILENAME_LEN];	// Filename ( including NULL character )
 	uint32_t size; // Size of the file (in bytes)
 	uint16_t first_datablock_index; // Index of the first data block
 	char padding[10];
@@ -86,8 +86,8 @@ struct root_dir_entry {
 
 /* Global variables to used in the file system */
 static int fs_mounted = 0;
-static struct superblock sb; // superblock of the moutner file system
-static struct root_dir_entry root_dir[FS_FILE_MAX_COUNT]; //root directory of the mounter file system
+static struct superblock sb; // superblock of the mounter file system
+struct root_dir_entry root_dir[FS_FILE_MAX_COUNT]; //root directory of the mounter file system
 
 /* TODO: Phase 1 */
 
@@ -116,7 +116,7 @@ int fs_mount(const char *diskname)
 	if(FAT == NULL)
 		return -1; //Memory allocation for FAT failed
 
-	for(uint8_t i = 1; i < sb.total_FAT_blocks; i++)
+	for(size_t i = 1; i < sb.total_FAT_blocks + 1; i++)
 	{
 		if(block_read(i, &FAT + (i-1)*BLOCK_SIZE) == -1)
 		{
@@ -150,17 +150,16 @@ int fs_umount(void)
 	if(fs_mounted == 0)
 		return -1;
 
-	/* checking if all the files are closed */
-	for(int i = 0 ; i < FS_OPEN_MAX_COUNT; i++)
+	/* Rewriting Superblock back to disk */
+	if (block_write(0, &sb)==-1)
 	{
-		if(file_table[i].used == 1)
-			return -1;	
+		//failed to rewrite superblock back to disk
+		return -1;
 	}
-	
 	/* Write FAT table and root directory back to disk */
-	for(uint32_t i = 1; i < sb.total_FAT_blocks; i++)
+	for(size_t i = 1; i < sb.total_FAT_blocks + 1; i++)
 	{
-		if(block_write( i, &FAT + (i-1)*BLOCK_SIZE ) == -1)
+		if(block_write(i, &FAT + (i-1)*BLOCK_SIZE ) == -1)
 			return -1;
 	}
 	if(block_write(sb.root_dir_index, root_dir) == -1)
@@ -168,30 +167,145 @@ int fs_umount(void)
 
 	fs_mounted = 0;
 	
-	if(block_disk_closed() == -1)
-		return -1;
-
-	return 0;
+	return block_disk_close();
 }
 
 int fs_info(void)
 {
-	/* TODO: Phase 1 */
+	printf("FS Info:\n"
+			"total_blk_count=%d\n"
+			"fat_blk_count=%d\n"
+			"rdir_blk=%d\n"
+			"data_blk=%d\n"
+			"data_blk_count%d\n", 
+			sb.total_disk_blocks, sb.total_FAT_blocks, sb.root_dir_index, sb.data_block_start_index, sb.total_data_blocks
+	);
+	int fat_free = 0;
+	for(int i = 0; i < sb.total_data_blocks; i++) //subtract 1 if FAT_EOC doesn't count
+	{
+		if(FAT[i] == 0)
+			fat_free++;
+	}
+	printf("fat_free_ratio=%zu\%\n", (uint16_t)fat_free/sb.total_data_blocks);
+	int root_free = 0;
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++)
+	{
+		if(root_dir[i].filename[0] == '\0')
+			root_free++;
+	}
+	printf("rdir_free_ratio=%d\%\n", root_free/FS_FILE_MAX_COUNT);
 }
 
 int fs_create(const char *filename)
 {
-	/* TODO: Phase 2 */
+	/* check if FS is mounted */
+	if(fs_mounted == 0)
+		return -1;
+
+	if(filename == NULL)
+	{
+		//no filename provided
+		return -1;
+	}
+	if(strlen(filename) > FS_FILENAME_LEN)
+	{
+		//filename too long
+		return -1;
+	}
+	
+	int freeEntry = -1; //keep track of the first freeEntry in the directory
+	int pollingFlag = 1; //flag to determine whether or not we're still looking for a freeEntry
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++) //Purpose: check if filename already exists but also find first free entry
+	{
+		if(root_dir[i].filename[0] == '\0' && pollingFlag) // if we found a freeEntry
+		{
+			freeEntry = i; //take the index
+			pollingFlag = 0; //no longer polling for freeEntry
+		}
+		if(strcmp((char*)root_dir[i].filename, filename) == 0)
+		{
+			//file already exists within directory
+			return -1;
+		}
+	}
+	if (freeEntry < 0)
+	{
+		//directory is full
+		return -1;
+	}
+	else
+	{
+		memcpy(root_dir[freeEntry].filename, filename, FS_FILENAME_LEN);
+		root_dir[freeEntry].size = 0;
+		root_dir[freeEntry].first_datablock_index = FAT_EOC;
+	}
+
+	return 0;
+
 }
 
 int fs_delete(const char *filename)
 {
 	/* TODO: Phase 2 */
+
+	//if file @filename is currently open
+
+	/*
+	array[FS_FILE_MAX_COUNT] = malloc(0)
+	fs_open -> file descriptor number
+	open -> array[i] = 1
+
+	*/
+
+	if(fs_mounted == 0)
+		return -1;
+
+	if(filename == NULL || strlen(filename) > FS_FILENAME_LEN)
+	{
+		//provided invalid file name
+		return -1;
+	}
+
+	int i = 0;
+	while(strcmp(root_dir[i].filename, filename) != 0 && i <= FS_FILE_MAX_COUNT)
+		i++;
+	if(i > FS_FILE_MAX_COUNT-1)
+	{
+		//File not found
+		return -1;
+	}
+	uint16_t index = root_dir[i].first_datablock_index;
+	root_dir[i].filename[0] = '\0';
+	root_dir[i].size = 0;
+	root_dir[i].first_datablock_index = FAT_EOC;
+
+	block_write(sb.root_dir_index, root_dir);
+	
+	//clear FAT chain
+	while(index != FAT_EOC)
+	{
+		uint16_t next = FAT[index];
+		FAT[index] = 0;
+		index = next;
+	}
+	return 0;
 }
 
 int fs_ls(void)
 {
-	/* TODO: Phase 2 */
+	if(fs_mounted == 0)
+	{
+		//not mounted
+		return -1;
+	}
+
+	printf("FS ls:");
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++)
+	{
+		if(root_dir[i].filename[0] != '\0')
+			printf("file: %s, size: %d, data_blk: %d\n", root_dir[i].filename, root_dir[i].size, root_dir[i].first_datablock_index);
+	}
+	return 0;
 }
 
 int fs_open(const char *filename)

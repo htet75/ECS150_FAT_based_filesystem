@@ -17,19 +17,6 @@ struct superblock{
 	uint8_t padding[4079]; // Unused/Padding
 }__attribute__((packed));
 
-/*
-struct superblock{
-	uint8_t signature[8];
-	uint16_t version;
-	uint16_t block_size;
-	uint32_t fs_size;
-	uint32_t fat_start;
-	uint32_t fat_blocks;
-	uint32_t root_start;
-	uint32_t root_blocks;
-};
-*/
-
 #define FAT_EOC 0xFFFF // End-of-Chain value
 #define FAT_ENTRIES_PER_BLOCK 2048 // Number of FAT entries per block
 
@@ -97,14 +84,10 @@ struct root_dir_entry {
 	char padding[10];
 }__attribute__((packed));
 
-struct root_dir_entry root_dir[128];
-
-
 /* Global variables to used in the file system */
-static int fs_mounted = 0;	//flag to check if a file system is mounted
+static int fs_mounted = 0;
 static struct superblock sb; // superblock of the moutner file system
-static struct fat_entry *fat_table = NULL; // FAT tabe of the mounter file system
-static struct root_entry root_table[FS_FILE_MAX_COUNT]; //root directory of the mounter file system
+static struct root_dir_entry root_dir[FS_FILE_MAX_COUNT]; //root directory of the mounter file system
 
 /* TODO: Phase 1 */
 
@@ -151,11 +134,11 @@ int fs_mount(const char *diskname)
 	/* Read the root direcory from disk */
 	if (block_read(sb.root_dir_index, root_dir) == -1)
 	{
-		free(fat_table);
+		free(FAT);
 		return -1;
 	}
 
-	fs_mounted = 1;
+	fs_mounted == 1;
 
 	return 0;
 }
@@ -175,18 +158,16 @@ int fs_umount(void)
 	}
 	
 	/* Write FAT table and root directory back to disk */
-	for(uint32_t i = 0; i < sb.fat_blocks; i++)
+	for(uint32_t i = 1; i < sb.total_FAT_blocks; i++)
 	{
-		if(block_write(sb.fat_start + i, fat_table + i * BLOCK_SIZE) == -1)
+		if(block_write( i, &FAT + (i-1)*BLOCK_SIZE ) == -1)
 			return -1;
 	}
-	for(uint32_t i = 0; i < sb.root_blocks; i++)
-	{
-		if(block_write(sb.root_start + i, root_table + i * BLOCK_SIZE) == -1)
-			return -1;
-	}
+	if(block_write(sb.root_dir_index, root_dir) == -1)
+		return -1;
 
 	fs_mounted = 0;
+	
 	if(block_disk_closed() == -1)
 		return -1;
 

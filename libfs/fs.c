@@ -96,6 +96,7 @@ struct root_dir_entry {
 	uint16_t first_datablock_index; // Index of the first data block
 	char padding[10];
 }__attribute__((packed));
+
 struct root_dir_entry root_dir[128];
 
 
@@ -132,10 +133,9 @@ int fs_mount(const char *diskname)
 	if(fat_table == NULL)
 		return -1; //Memory allocation for FAT failed
 
-
-	for(uint32_t i = 0; i < sb.fat_blocks; i++)
+	for(uint8_t i = 1; i < sb.total_FAT_blocks; i++)
 	{
-		if(block_read(sb.fat_start + i, fat_table + i * BLOCK_SIZE) == -1)
+		if(block_read(i, &fat_table-1+i) == -1)
 		{
 			free(fat_table);
 			return -1;
@@ -143,13 +143,10 @@ int fs_mount(const char *diskname)
 	}
 
 	/* Read the root direcory from disk */
-	for(uint32_t i=0; i<sb.root_blocks; i++)
+	if (block_read(sb.root_dir_index, root_dir) == -1)
 	{
-		if(block_read(sb.root_start + i, root_table + i * BLOCK_SIZE) == -1)
-		{
-			free(fat_table);
-			return -1;
-		}
+		free(fat_table);
+		return -1;
 	}
 
 	fs_mounted = 1;

@@ -1,7 +1,11 @@
 # Target library
 lib := libfs.a
 CC := gcc
-CLFAGS := -g -WALL -Werror -Wextra
+CFLAGS := -Wextra
+
+#I need to add this later 
+# CFLAGS += -Wall -Werror
+
 objs := disk.o fs.o 
 
 all: $(lib)
@@ -16,10 +20,10 @@ CFLAGS	+= -g
 endif
 
 $(lib): $(objs)
-		ar rcs $@ $^
+	ar rcs $@ $^
 
-%.o: %.C	
-		$(CC) $(CFLAGS) -c -o $@ $<
+%.o: %.c	
+	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-		rm -rf $(lib) $(objs)
+	rm -rf $(lib) $(objs)

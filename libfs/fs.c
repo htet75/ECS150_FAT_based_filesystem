@@ -13,7 +13,7 @@ struct superblock
 	uint16_t total_disk_blocks;		 // Total amount of blocks of virtual disk
 	uint16_t root_dir_index;		 // Root directory block index
 	uint16_t data_block_start_index; // Data block start index
-	uint16_t total_data_blocks;		 // Amount of data blocks
+	uint16_t data_blocks_count;		 // Amount of data blocks
 	uint8_t total_FAT_blocks;		 // Number of blocks for FAT
 	uint8_t padding[4079];			 // Unused/Padding
 } __attribute__((packed));
@@ -24,10 +24,11 @@ struct superblock
 uint16_t *FAT; // pointer to FAT array
 
 /* Initializing FAT array */
-void init_FAT(uint16_t total_blocks)
+void init_FAT(uint16_t data_blocks_count)
 {
-	int num_FAT_blocks = (total_blocks + FAT_ENTRIES_PER_BLOCK - 1) / FAT_ENTRIES_PER_BLOCK;
-	FAT = calloc(num_FAT_blocks * FAT_ENTRIES_PER_BLOCK, sizeof(uint16_t)); // allocating memory for FAT
+	/* There are as many entries as data blocks in the disk */
+	int num_FAT_blocks = (data_blocks_count + FAT_ENTRIES_PER_BLOCK - 1) / FAT_ENTRIES_PER_BLOCK;
+	FAT = (uint16_t *)malloc(num_FAT_blocks * FAT_ENTRIES_PER_BLOCK * sizeof(uint16_t)); // allocating memory for FAT
 	FAT[0] = FAT_EOC;														// Setting first entry to END-of-Chain value
 }
 
@@ -124,7 +125,6 @@ int fs_mount(const char *diskname)
 {
 	/* TODO: Phase 1 */
 	/* Opening virtual disk file */
-	printf("mounting: %s\n", diskname);
 	if (block_disk_open(diskname) == -1)
 		return -1;
 
@@ -141,14 +141,15 @@ int fs_mount(const char *diskname)
 		return -1; // Currently open disk does not match SB block count
 
 	/* Allocate memory for the FAT table and read it from disk */
-	FAT = (uint16_t *)malloc(sb.total_data_blocks * sizeof(uint16_t)); //"There are as many entries as data blocks in the disk"
+	init_FAT(sb.data_blocks_count);
+	// FAT = (uint16_t *)malloc(sb.data_blocks_count * sizeof(uint16_t)); //"There are as many entries as data blocks in the disk"
 
 	if (FAT == NULL)
 		return -1; // Memory allocation for FAT failed
 
-	for (size_t i = 1; i < sb.total_FAT_blocks + 1; i++)
+	for (int i = 0; i < sb.total_FAT_blocks; i++)
 	{
-		if (block_read(i, &FAT + (i - 1) * BLOCK_SIZE) == -1)
+		if (block_read( i+1, FAT + i * BLOCK_SIZE ) == -1)
 		{
 			free(FAT);
 			return -1;
@@ -168,15 +169,13 @@ int fs_mount(const char *diskname)
 		return -1;
 	}
 
-	fs_mounted == 1;
-	printf("mounting exiting!\n");
+	fs_mounted = 1;
 	return 0;
 }
 
 int fs_umount(void)
 {
 	/* checking if the file system is mounted*/
-	printf("unmounting starting\n");
 	if (fs_mounted == 0)
 		return -1;
 
@@ -192,18 +191,17 @@ int fs_umount(void)
 		// failed to rewrite superblock back to disk
 		return -1;
 	}
+
 	/* Write FAT table and root directory back to disk */
-	for (size_t i = 1; i < sb.total_FAT_blocks + 1; i++)
+	for (int i = 0; i < sb.total_FAT_blocks; i++)
 	{
-		if (block_write(i, &FAT + (i - 1) * BLOCK_SIZE) == -1)
+		if (block_write(i + 1, FAT + i * BLOCK_SIZE) == -1)
 			return -1;
 	}
 	if (block_write(sb.root_dir_index, root_dir.root_dir_entries) == -1)
 		return -1;
 
 	fs_mounted = 0;
-
-	printf("unmounting finished\n");
 
 	return block_disk_close();
 }
@@ -222,23 +220,22 @@ int fs_info(void)
 		   "fat_blk_count=%d\n"
 		   "rdir_blk=%d\n"
 		   "data_blk=%d\n"
-		   "data_blk_count%d\n",
-		   sb.total_disk_blocks, sb.total_FAT_blocks, sb.root_dir_index, sb.data_block_start_index, sb.total_data_blocks);
+		   "data_blk_count=%d\n",
+		   sb.total_disk_blocks, sb.total_FAT_blocks, sb.root_dir_index, sb.data_block_start_index, sb.data_blocks_count);
 	int fat_free = 0;
-	for (int i = 0; i < sb.total_data_blocks; i++) // subtract 1 if FAT_EOC doesn't count
+	for (int i = 0; i < sb.data_blocks_count; i++) // subtract 1 if FAT_EOC doesn't count
 	{
 		if (FAT[i] == 0)
 			fat_free++;
 	}
-	printf("fat_free_ratio=%zu%%", (size_t)fat_free * 100 / sb.total_data_blocks);
-	printf("\n");
+	printf("fat_free_ratio=%d/%d\n", fat_free, sb.data_blocks_count);
 	int root_free = 0;
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++)
 	{
 		if (root_dir.root_dir_entries[i].filename[0] == '\0')
 			root_free++;
 	}
-	printf("rdir_free_ratio=%d%%\n", root_free / FS_FILE_MAX_COUNT);
+	printf("rdir_free_ratio=%d/%d\n", root_free, FS_FILE_MAX_COUNT);
 	return 0;
 }
 
@@ -436,16 +433,17 @@ int fs_stat(int fd)
 
 int fs_lseek(int fd, size_t offset)
 {
-	if(offset < 0)
-	{
-		/*
-		Not asked by Porquet but doesn't make sense to have negative offset
-		*/
-		//invalid offset
-		return -1;
-	}
+	/* size_t is supposed to be unsigned, therefore, will never be negative*/
+	// if(offset < 0)
+	// {
+	// 	/*
+	// 	Not asked by Porquet but doesn't make sense to have negative offset
+	// 	*/
+	// 	//invalid offset
+	// 	return -1;
+	// }
 	//add other error checks if program doesn't terminate upon error
-	if(offset > fs_stat(fd)) //calling fs_stat will run the fd through the error checking in fs_stat
+	if(offset > (size_t)fs_stat(fd)) //calling fs_stat will run the fd through the error checking in fs_stat
 	{
 		//offset larger than size
 		return -1;

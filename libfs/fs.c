@@ -28,7 +28,7 @@ void init_FAT(uint16_t data_blocks_count)
 {
 	/* There are as many entries as data blocks in the disk */
 	int num_FAT_blocks = (data_blocks_count + FAT_ENTRIES_PER_BLOCK - 1) / FAT_ENTRIES_PER_BLOCK;
-	FAT = (uint16_t *)malloc(num_FAT_blocks * FAT_ENTRIES_PER_BLOCK * sizeof(uint16_t)); // allocating memory for FAT
+	FAT = malloc(num_FAT_blocks * FAT_ENTRIES_PER_BLOCK * sizeof(uint16_t)); // allocating memory for FAT
 	FAT[0] = FAT_EOC;														// Setting first entry to END-of-Chain value
 }
 
@@ -123,6 +123,7 @@ struct root_directory root_dir;
 
 int fs_mount(const char *diskname)
 {
+	printf("...fs_mount() initalize\n");
 	/* TODO: Phase 1 */
 	/* Opening virtual disk file */
 	if (block_disk_open(diskname) == -1)
@@ -169,14 +170,16 @@ int fs_mount(const char *diskname)
 		return -1;
 	}
 
+	// printf("fs_mount() exiting...\n");
 	fs_mounted = 1;
 	return 0;
 }
 
 int fs_umount(void)
 {
+	// printf("...fs_unmount() intialize\n");
 	/* checking if the file system is mounted*/
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 		return -1;
 
 	if(fd_table.total_opened > 0)
@@ -202,14 +205,14 @@ int fs_umount(void)
 		return -1;
 
 	fs_mounted = 0;
-
+	// free(FAT);
 	return block_disk_close();
 }
 
 int fs_info(void)
 {
 	printf("starting fs_info\n");
-	if(fs_mounted == 0)
+	if(!fs_mounted)
 	{
 		//no disk mounted
 		return -1;
@@ -242,7 +245,7 @@ int fs_info(void)
 int fs_create(const char *filename)
 {
 	/* check if FS is mounted */
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 		return -1;
 
 	if (filename == NULL)
@@ -297,7 +300,7 @@ int fs_delete(const char *filename)
 	// Loop through fd_table for filename
 	// If loop passes through, file is not open
 
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 		return -1;
 
 	if (filename == NULL || strlen(filename) > FS_FILENAME_LEN)
@@ -334,13 +337,13 @@ int fs_delete(const char *filename)
 
 int fs_ls(void)
 {
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 	{
 		// not mounted
 		return -1;
 	}
 
-	printf("FS ls:");
+	printf("FS ls:\n");
 	for (int i = 0; i < FS_FILE_MAX_COUNT; i++)
 	{
 		if (root_dir.root_dir_entries[i].filename[0] != '\0')
@@ -351,33 +354,53 @@ int fs_ls(void)
 
 int fs_open(const char *filename) // do we not have to check if the file is already open?
 {
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 		return -1;
 
-	if (filename == NULL)
+	if (filename == NULL || strlen(filename) == 0 || strlen(filename) > FS_FILENAME_LEN)
 	{
-		// no filename provided
-		return -1;
+		//invalid filename
+		return -1; 
 	}
-	if (strlen(filename) > FS_FILENAME_LEN)
+
+	/* check if there is already a file with the same name opened */
+	for(int i = 0; i < fd_table.total_opened; i++)
 	{
-		// filename too long
-		return -1;
+		if(strcmp(fd_table.files[i].filename, filename) == 0)
+			return -1;
 	}
+
+	/* check if there is room to open another file */
 	if (fd_table.total_opened == FS_OPEN_MAX_COUNT)
 	{
 		// max files opened
 		return -1;
 	}
+
 	/*Find whether the file exists*/
 	int i = 0;
 	while (strcmp(root_dir.root_dir_entries[i].filename, filename) != 0 && i < FS_FILE_MAX_COUNT)
 		i++;
-	if (i == FS_FILE_MAX_COUNT - 1)
+
+	if (i == root_dir.total_opened - 1)
 	{
 		// file not found
 		return -1;
 	}
+
+	/* find the file in the root directory */
+	// int file_index = -1;
+	// for (int i = 0; i< root_dir.total_opened; i++)
+	// {
+	// 	if(strcmp(root_dir.root_dir_entries[i].filename, filename) == 0)
+	// 	{
+	// 		file_index = i;
+	// 		break;
+	// 	}
+	// }
+	// if(file_index == -1)
+	// 	return -1; //file not found
+
 	/*Find the next available space and open add the entry into the fd_table at offset 0*/
 	/*Note, we shouldn't have to worry about there being no space since we would've returned earlier*/
 	int j = 0;
@@ -387,11 +410,21 @@ int fs_open(const char *filename) // do we not have to check if the file is alre
 	fd_table.files[j].offset = 0;
 	fd_table.total_opened++;
 	return j;
+
+	/*create a new file desciprtor for the opened file */
+	// struct file new_file = {0};
+	// strncpy(new_file.filename, filename, FS_FILENAME_LEN);
+	// new_file.offset = 0;
+
+	// /* Add the new file descriptor to the file descriptor table */
+	// fd_table.files[fd_table.total_opened] = new_file;
+	// fd_table.total_opened++;
+	// return fd_table.total_opened -1;
 }
 
 int fs_close(int fd) //gonna assume its 0 based
 {
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 		return -1;
 
 	if(fd > FS_OPEN_MAX_COUNT-1 || fd < 0)
@@ -412,8 +445,9 @@ int fs_close(int fd) //gonna assume its 0 based
 
 int fs_stat(int fd)
 {
-	if (fs_mounted == 0)
+	if (!fs_mounted)
 		return -1;
+
 	if(fd > FS_OPEN_MAX_COUNT-1 || fd < 0)
 	{
 		//invalid fd
@@ -424,11 +458,35 @@ int fs_stat(int fd)
 		//file not open
 		return -1;
 	}
-	int i = 0;
-	//the file should exist at this point so we don't need to check for missing file
-	while(strcmp(root_dir.root_dir_entries[i].filename, fd_table.files[fd].filename) != 0)
-		i++;
-	return root_dir.root_dir_entries[i].size;
+
+	char * filename = (char*)fd_table.files[fd].filename;
+	int current_file_size = -1;
+	int idx = -1;
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++)
+	{
+		if(strcmp((char*)root_dir.root_dir_entries[i].filename, filename) == 0)
+		{
+			current_file_size = root_dir.root_dir_entries[i].size;
+			idx = i;
+			break;
+		}
+	}
+
+	if(current_file_size == -1)
+		return -1;
+
+	// int i = 0;
+	// //the file should exist at this point so we don't need to check for missing file
+	// while(strcmp(root_dir.root_dir_entries[i].filename, fd_table.files[fd].filename) == 0)
+	// {
+	// 	printf("root_dir[%d]: %s\n", i, root_dir.root_dir_entries[i].filename);
+	// 	i++;
+	// 	if(i > FS_FILE_MAX_COUNT)
+	// 		return -1;
+	// }
+	
+	printf("root_dir.root_dir_entries.size[%d]: %d\n", idx, current_file_size);
+	return root_dir.root_dir_entries[idx].size;
 }
 
 int fs_lseek(int fd, size_t offset)
@@ -442,6 +500,12 @@ int fs_lseek(int fd, size_t offset)
 	// 	//invalid offset
 	// 	return -1;
 	// }
+	if(!fs_mounted)
+		return -1;
+	
+	if( fd < 0 || fd >= FS_OPEN_MAX_COUNT || fd_table.files[fd].filename[0] == '\0' )
+		return -1;
+
 	//add other error checks if program doesn't terminate upon error
 	if(offset > (size_t)fs_stat(fd)) //calling fs_stat will run the fd through the error checking in fs_stat
 	{
@@ -460,5 +524,69 @@ int fs_write(int fd, void *buf, size_t count)
 
 int fs_read(int fd, void *buf, size_t count)
 {
+	printf("...fs_read() intialization\n");
 	/* TODO: Phase 4 */
+	if(!fs_mounted)
+		return -1;
+	
+	if(fd < 0 || fd >= fd_table.total_opened)
+		return -1;
+
+	if(buf == NULL)
+		return -1;
+
+	if(fd_table.files[fd].filename[0] == '\0')
+		return -1;
+
+	char *filename = fd_table.files[fd].filename;
+	size_t offset = fd_table.files[fd].offset;
+	int file_size = fs_stat(fd);
+
+	int remaining_size = file_size - offset;
+	int bytes_to_read = (int)count < remaining_size ? (int)count : remaining_size;
+
+	uint16_t data_block_index = root_dir.root_dir_entries[fd].first_datablock_index;
+	int bytes_read = 0;
+
+	while(bytes_to_read > 0 && data_block_index != FAT_EOC)
+	{
+		void *bounce_buffer = malloc(BLOCK_SIZE);
+		block_read(data_block_index, bounce_buffer);
+
+		int block_offset = offset % BLOCK_SIZE;
+		int block_bytes_to_read = BLOCK_SIZE - block_offset;
+		int copy_size = bytes_to_read < block_bytes_to_read ? bytes_to_read : block_bytes_to_read;
+        memcpy(buf + bytes_read, bounce_buffer + block_offset, copy_size);
+
+		offset += copy_size;
+		bytes_read += copy_size;
+		bytes_to_read -= copy_size;
+
+		data_block_index = FAT[data_block_index];
+
+		free(bounce_buffer);
+	}
+
+
+	fd_table.files[fd].offset = offset;
+
+	printf("fs_read() finished %d\n", bytes_read);
+	return bytes_read;
 }
+
+
+/*
+	struct file *file = &fd_table.files[fd];
+	uint16_t block_index = get_first_block_index(file->offset / BLOCK_SIZE);
+	size_t bytes_read = 0;
+
+	while (bytes_read < count && block_index != FAT_EOC)
+	{
+		block_read(block_index + sb.data_block_start_index, buf + bytes_read);
+
+		bytes_read += BLOCK_SIZE;
+		file->offset += BLOCK_SIZE;
+
+		block_index = get_next_block(block_index);
+	}
+*/

@@ -470,6 +470,30 @@ uint16_t get_first_data_block_index(int fd)
 	}
 }
 
+uint16_t get_last_data_block_index(int fd)
+{
+	char* filename = fd_table.files[fd].filename;
+	for(int i = 0; i< FS_FILE_MAX_COUNT; i++)
+	{
+		if(strcmp(root_dir.root_dir_entries[i].filename, filename) == 0)
+		{
+			uint16_t index =  root_dir.root_dir_entries[i].first_datablock_index;
+			if(index != FAT_EOC)
+			{
+				uint16_t next = index;
+				while (next != FAT_EOC)
+				{
+					index = next;
+					next = FAT[index];
+				}
+				return index; 
+			}
+			else
+				return index;
+		}
+	}
+}
+
 uint16_t allocate_newblock()
 {
 	uint16_t block_idx;
@@ -511,47 +535,81 @@ int fs_write(int fd, void *buf, size_t count)
 	if(fd_table.files[fd].filename[0] == '\0')
 		return -1;
 
-	char *filename = fd_table.files[fd].filename;
-	size_t offset = fd_table.files[fd].offset;
-	int file_size = fs_stat(fd);
+	struct file f = fd_table.files[fd];
 
-	int remaining_size = file_size - offset;
-	int bytes_to_write = 0;
-	if((int) count < remaining_size)
-		bytes_to_write = count;
-	else
-		bytes_to_write = remaining_size;
-	uint16_t data_block_index = get_first_data_block_index(fd);
-	int bytes_read = 0; // tracking the amount of bytes read into @buf
-	while(bytes_to_write > 0 && data_block_index != FAT_EOC)
+	// uint16_t block_index = get_first_data_block_index(fd);
+	uint16_t block_index; 
+	if(fs_stat(fd) == 0)
 	{
-		void *bounce_buffer = malloc(BLOCK_SIZE);
-
-		if(block_read(data_block_index, bounce_buffer) == -1)
-			return -1;
-
-		int block_offset = offset % BLOCK_SIZE;	//offset goes from [0, size_of_file in bytes] % BLOCK_SIZE -> choosing which data block 
-		int block_bytes_to_write = BLOCK_SIZE - block_offset; // checking if there is more than or less than (bytes_to_write)
-		int copy_size = 0;
-		if(bytes_to_write < block_bytes_to_write)
-			copy_size = bytes_to_write;
-		else
-			copy_size = block_bytes_to_write;
-
-        memcpy((char*)buf + bytes_read, (char*)bounce_buffer + block_offset, copy_size);
-		offset += copy_size;
-		bytes_read += copy_size;
-		bytes_to_write -= copy_size;
-
-		data_block_index = FAT[data_block_index];	// go to the next data block for current file
-
-		free(bounce_buffer);
+		block_index = allocate_newblock();
+	}
+	else
+	{
+		block_index = get_last_data_block_index(fd);
 	}
 
-	fd_table.files[fd].offset = offset;
+	printf("block_index: %d\n", block_index);
+	size_t offset_in_block = f.offset % BLOCK_SIZE;
+	printf("offset_in_block: %ld\n", offset_in_block);
 
-	printf("fs_read() finished %d\n", bytes_read);
-	return bytes_read;
+	size_t bytes_written = 0;
+	while(bytes_written < count)
+	{
+		void* bounce_buffer = malloc(BLOCK_SIZE);
+		if(block_read(block_index, bounce_buffer) == -1)		// Reading any content at block_index to bounce_buffer
+			return -1;
+		
+		printf("bounce_buffer content:\n");
+		for (int i = 0; i < 20; i++) {
+			printf("%02x ", ((unsigned char*)bounce_buffer)[i]);
+			if ((i + 1) % 16 == 0) printf("\n"); // print a newline every 16 bytes
+		}
+
+		size_t bytes_to_write = BLOCK_SIZE - offset_in_block;
+		if(bytes_written + bytes_to_write > count)
+			bytes_to_write = count - bytes_written;
+		
+		memcpy(bounce_buffer + offset_in_block, buf + bytes_written, bytes_to_write);
+		printf("bounce_buffer content:\n");
+		for (int i = 0; i < 20; i++) {
+			printf("%02x ", ((unsigned char*)bounce_buffer)[i]);
+			if ((i + 1) % 16 == 0) printf("\n"); // print a newline every 16 bytes
+		}
+
+		printf("offset_in_block: %ld, bytes_written: %zu, bytes_to_write: %zu\n", offset_in_block, bytes_written, bytes_to_write);
+
+		if(block_write(block_index, bounce_buffer) == -1)
+			return -1;
+
+		size_t remaining_bytes = count - bytes_written - bytes_to_write;
+		printf("remaining_bytes: %zu\n", remaining_bytes);
+		if(remaining_bytes > 0)
+		{
+			uint16_t next_block_index = FAT[block_index];
+			if(next_block_index == FAT_EOC)
+			{
+				next_block_index = allocate_newblock();
+				if(next_block_index == FAT_EOC)
+					bytes_written += bytes_to_write;
+					break;
+				FAT[block_index] = next_block_index;
+				FAT[next_block_index] = FAT_EOC;
+			}
+			block_index = next_block_index;
+			offset_in_block = 0;
+		}
+		else
+		{
+			update_file_size(fd, bytes_to_write);
+			bytes_written += bytes_to_write;
+			printf("file size: %d\n", fs_stat(fd));
+			break;
+		}
+		bytes_written += bytes_to_write;
+		printf("last bytes_written: %zu\n", bytes_written);
+	}
+	printf("returned bytes_written: %zu\n", bytes_written);
+	return bytes_written;
 }
 
 int fs_read(int fd, void *buf, size_t count)

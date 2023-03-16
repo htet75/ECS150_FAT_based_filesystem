@@ -547,12 +547,12 @@ int fs_write(int fd, void *buf, size_t count)
 	{
 		block_index = get_last_data_block_index(fd);
 	}
-
+	//at this point, block_index = the block we're writing to
 	printf("block_index: %d\n", block_index);
-	size_t offset_in_block = f.offset % BLOCK_SIZE;
+	size_t offset_in_block = f.offset % BLOCK_SIZE; //get the last offset in the block -- 0 if newly allocated otherwise 0 or >
 	printf("offset_in_block: %ld\n", offset_in_block);
 
-	size_t bytes_written = 0;
+	size_t bytes_written = 0; //we will return this 
 	while(bytes_written < count)
 	{
 		void* bounce_buffer = malloc(BLOCK_SIZE);
@@ -566,10 +566,11 @@ int fs_write(int fd, void *buf, size_t count)
 		}
 
 		size_t bytes_to_write = BLOCK_SIZE - offset_in_block;
-		if(bytes_written + bytes_to_write > count)
-			bytes_to_write = count - bytes_written;
+		if(bytes_written + bytes_to_write > count) //if we have a need for this then we did something wrong LMAO
+			bytes_to_write = count - bytes_written; 
 		
-		memcpy(bounce_buffer + offset_in_block, buf + bytes_written, bytes_to_write);
+		memcpy(bounce_buffer + offset_in_block, buf + bytes_written, bytes_to_write); //i think we're supposed to be writing 1 byte at a time but lmk if im wrong
+		//also bytes_to_write still has the potential to be > BLOCK_SIZE here so our memcpy would fail if we're writing more than a block
 		printf("bounce_buffer content:\n");
 		for (int i = 0; i < 20; i++) {
 			printf("%02x ", ((unsigned char*)bounce_buffer)[i]);
@@ -581,7 +582,7 @@ int fs_write(int fd, void *buf, size_t count)
 		if(block_write(block_index, bounce_buffer) == -1)
 			return -1;
 
-		size_t remaining_bytes = count - bytes_written - bytes_to_write;
+		size_t remaining_bytes = count - bytes_written - bytes_to_write; //doesnt bytes to write + bytes written = count?
 		printf("remaining_bytes: %zu\n", remaining_bytes);
 		if(remaining_bytes > 0)
 		{

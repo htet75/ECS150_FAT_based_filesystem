@@ -23,69 +23,6 @@ struct superblock
 
 uint16_t *FAT; // pointer to FAT array
 
-/* Initializing FAT array */
-void init_FAT(uint16_t data_blocks_count)
-{
-	/* There are as many entries as data blocks in the disk */
-	int num_FAT_blocks = (data_blocks_count + FAT_ENTRIES_PER_BLOCK - 1) / FAT_ENTRIES_PER_BLOCK;
-	FAT = malloc(num_FAT_blocks * FAT_ENTRIES_PER_BLOCK * sizeof(uint16_t)); // allocating memory for FAT
-	FAT[0] = FAT_EOC;														// Setting first entry to END-of-Chain value
-}
-
-/* Getting the next block in the chain of FAT array */
-uint16_t get_next_block(uint16_t block_index)
-{
-	uint16_t entry = FAT[block_index];
-	if (entry >= FAT_EOC)
-		return FAT_EOC; // End-of-cain
-	return entry;
-}
-
-/* FAT: set next block in the chain */
-void set_next_block(uint16_t block_index, uint16_t next_block_index)
-{
-	FAT[block_index] = next_block_index;
-}
-
-/* FAT: get the block index of the first block of a file */
-uint16_t get_first_block_index(uint16_t file_block_index)
-{
-	return file_block_index + 1; // First block index is one past the file block index
-}
-
-/* FAT: get the block index of the last block of a file */
-uint16_t get_last_block_index(uint16_t first_block_index)
-{
-	uint16_t block_index = first_block_index;
-	while (get_next_block(block_index) != FAT_EOC)
-	{
-		block_index = get_next_block(block_index);
-	}
-	return block_index;
-}
-
-/* FAT: allocating a new block for a file */
-uint16_t allocate_block(uint16_t prev_block_index, uint16_t num_blocks_allocated)
-{
-	uint16_t block_index = prev_block_index;
-	for (int i = 0; i < num_blocks_allocated; i++)
-	{
-		uint16_t next_block_index = get_next_block(block_index);
-		if (next_block_index == FAT_EOC)
-		{
-			uint16_t new_block_index = block_index + 1;
-			set_next_block(block_index, new_block_index);
-			set_next_block(new_block_index, FAT_EOC);
-			block_index = new_block_index;
-		}
-		else
-		{
-			block_index = next_block_index;
-		}
-	}
-	return block_index;
-}
-
 /* Root Directory data structure */
 struct root_dir_entry
 {
@@ -123,7 +60,7 @@ struct root_directory root_dir;
 
 int fs_mount(const char *diskname)
 {
-	printf("...fs_mount() initalize\n");
+	// printf("...fs_mount() initalize\n");
 	/* TODO: Phase 1 */
 	/* Opening virtual disk file */
 	if (block_disk_open(diskname) == -1)
@@ -142,15 +79,16 @@ int fs_mount(const char *diskname)
 		return -1; // Currently open disk does not match SB block count
 
 	/* Allocate memory for the FAT table and read it from disk */
-	init_FAT(sb.data_blocks_count);
+	// init_FAT(sb.data_blocks_count);
+	FAT = (uint16_t*)malloc(sb.data_blocks_count * BLOCK_SIZE * sizeof(uint16_t)); // allocating memory for FAT
 	// FAT = (uint16_t *)malloc(sb.data_blocks_count * sizeof(uint16_t)); //"There are as many entries as data blocks in the disk"
 
 	if (FAT == NULL)
 		return -1; // Memory allocation for FAT failed
 
-	for (int i = 0; i < sb.total_FAT_blocks; i++)
+	for (int i = 0 ; i < sb.root_dir_index; i++)
 	{
-		if (block_read( i+1, FAT + i * BLOCK_SIZE ) == -1)
+		if (block_read( i +1 , FAT + (i) * BLOCK_SIZE ) == -1)
 		{
 			free(FAT);
 			return -1;
@@ -211,7 +149,6 @@ int fs_umount(void)
 
 int fs_info(void)
 {
-	printf("starting fs_info\n");
 	if(!fs_mounted)
 	{
 		//no disk mounted
@@ -485,7 +422,7 @@ int fs_stat(int fd)
 	// 		return -1;
 	// }
 	
-	printf("root_dir.root_dir_entries.size[%d]: %d\n", idx, current_file_size);
+	// printf("root_dir.root_dir_entries.size[%d]: %d\n", idx, current_file_size);
 	return root_dir.root_dir_entries[idx].size;
 }
 
@@ -517,14 +454,50 @@ int fs_lseek(int fd, size_t offset)
 	return 0;
 }
 
-int fs_write(int fd, void *buf, size_t count)
+uint16_t get_first_data_block_index(int fd)
 {
-	/* TODO: Phase 4 */
+	char* filename = fd_table.files[fd].filename;
+	// printf("get_first data filename: %s\n", filename);
+	for( int i = 0; i < FS_FILE_MAX_COUNT; i++)
+	{
+		// printf("root_dir filename: %s\n", root_dir.root_dir_entries[i].filename);
+		if(strcmp(root_dir.root_dir_entries[i].filename, filename) == 0)
+		{
+			// printf("get_first_data_block_index filename: %s\n", fd_table.files[fd].filename);
+			// printf("fd: %d, file: %s, size: %d, data_blk: %d\n", fd, root_dir.root_dir_entries[i].filename, root_dir.root_dir_entries[i].size, root_dir.root_dir_entries[i].first_datablock_index);
+			return root_dir.root_dir_entries[i].first_datablock_index + sb.data_block_start_index;
+		}
+	}
 }
 
-int fs_read(int fd, void *buf, size_t count)
+uint16_t allocate_newblock()
 {
-	printf("...fs_read() intialization\n");
+	uint16_t block_idx;
+	for ( block_idx = sb.data_block_start_index; block_idx < sb.total_disk_blocks; block_idx++)
+	{
+		if(FAT[block_idx] == 0)
+		{
+			FAT[block_idx] = FAT_EOC;
+			return block_idx;
+		}
+	}
+	return FAT_EOC;
+}
+
+void update_file_size(int fd, size_t bytes_to_write)
+{
+	char* filename = fd_table.files[fd].filename;
+	for(int i = 0; i < FS_FILE_MAX_COUNT; i++)
+	{
+		if(strcmp(root_dir.root_dir_entries[i].filename, filename) == 0)
+		{
+			root_dir.root_dir_entries[i].size += bytes_to_write;
+		}
+	}
+}
+
+int fs_write(int fd, void *buf, size_t count)
+{
 	/* TODO: Phase 4 */
 	if(!fs_mounted)
 		return -1;
@@ -543,30 +516,37 @@ int fs_read(int fd, void *buf, size_t count)
 	int file_size = fs_stat(fd);
 
 	int remaining_size = file_size - offset;
-	int bytes_to_read = (int)count < remaining_size ? (int)count : remaining_size;
-
-	uint16_t data_block_index = root_dir.root_dir_entries[fd].first_datablock_index;
-	int bytes_read = 0;
-
-	while(bytes_to_read > 0 && data_block_index != FAT_EOC)
+	int bytes_to_write = 0;
+	if((int) count < remaining_size)
+		bytes_to_write = count;
+	else
+		bytes_to_write = remaining_size;
+	uint16_t data_block_index = get_first_data_block_index(fd);
+	int bytes_read = 0; // tracking the amount of bytes read into @buf
+	while(bytes_to_write > 0 && data_block_index != FAT_EOC)
 	{
 		void *bounce_buffer = malloc(BLOCK_SIZE);
-		block_read(data_block_index, bounce_buffer);
 
-		int block_offset = offset % BLOCK_SIZE;
-		int block_bytes_to_read = BLOCK_SIZE - block_offset;
-		int copy_size = bytes_to_read < block_bytes_to_read ? bytes_to_read : block_bytes_to_read;
-        memcpy(buf + bytes_read, bounce_buffer + block_offset, copy_size);
+		if(block_read(data_block_index, bounce_buffer) == -1)
+			return -1;
 
+		int block_offset = offset % BLOCK_SIZE;	//offset goes from [0, size_of_file in bytes] % BLOCK_SIZE -> choosing which data block 
+		int block_bytes_to_write = BLOCK_SIZE - block_offset; // checking if there is more than or less than (bytes_to_write)
+		int copy_size = 0;
+		if(bytes_to_write < block_bytes_to_write)
+			copy_size = bytes_to_write;
+		else
+			copy_size = block_bytes_to_write;
+
+        memcpy((char*)buf + bytes_read, (char*)bounce_buffer + block_offset, copy_size);
 		offset += copy_size;
 		bytes_read += copy_size;
-		bytes_to_read -= copy_size;
+		bytes_to_write -= copy_size;
 
-		data_block_index = FAT[data_block_index];
+		data_block_index = FAT[data_block_index];	// go to the next data block for current file
 
 		free(bounce_buffer);
 	}
-
 
 	fd_table.files[fd].offset = offset;
 
@@ -574,19 +554,60 @@ int fs_read(int fd, void *buf, size_t count)
 	return bytes_read;
 }
 
+int fs_read(int fd, void *buf, size_t count)
+{
+	/* TODO: Phase 4 */
+	if(!fs_mounted)
+		return -1;
+	
+	if(fd < 0 || fd >= fd_table.total_opened)
+		return -1;
 
-/*
-	struct file *file = &fd_table.files[fd];
-	uint16_t block_index = get_first_block_index(file->offset / BLOCK_SIZE);
-	size_t bytes_read = 0;
+	if(buf == NULL)
+		return -1;
 
-	while (bytes_read < count && block_index != FAT_EOC)
+	if(fd_table.files[fd].filename[0] == '\0')
+		return -1;
+
+	char *filename = fd_table.files[fd].filename;
+	size_t offset = fd_table.files[fd].offset;
+	int file_size = fs_stat(fd);
+
+	int remaining_size = file_size - offset;
+	int bytes_to_read = 0;
+	if((int) count < remaining_size)
+		bytes_to_read = count;
+	else
+		bytes_to_read = remaining_size;
+	uint16_t data_block_index = get_first_data_block_index(fd);
+	int bytes_read = 0; // tracking the amount of bytes read into @buf
+	while(bytes_to_read > 0 && data_block_index != FAT_EOC)
 	{
-		block_read(block_index + sb.data_block_start_index, buf + bytes_read);
+		void *bounce_buffer = malloc(BLOCK_SIZE);
 
-		bytes_read += BLOCK_SIZE;
-		file->offset += BLOCK_SIZE;
+		if(block_read(data_block_index, bounce_buffer) == -1)
+			return -1;
 
-		block_index = get_next_block(block_index);
+		int block_offset = offset % BLOCK_SIZE;	//offset goes from [0, size_of_file in bytes] % BLOCK_SIZE -> choosing which data block 
+		int block_bytes_to_read = BLOCK_SIZE - block_offset; // checking if there is more than or less than (bytes_to_read)
+		int copy_size = 0;
+		if(bytes_to_read < block_bytes_to_read)
+			copy_size = bytes_to_read;
+		else
+			copy_size = block_bytes_to_read;
+
+        memcpy((char*)buf + bytes_read, (char*)bounce_buffer + block_offset, copy_size);
+		offset += copy_size;
+		bytes_read += copy_size;
+		bytes_to_read -= copy_size;
+
+		data_block_index = FAT[data_block_index];	// go to the next data block for current file
+
+		free(bounce_buffer);
 	}
-*/
+
+	fd_table.files[fd].offset = offset;
+
+	printf("fs_read() finished %d\n", bytes_read);
+	return bytes_read;
+}

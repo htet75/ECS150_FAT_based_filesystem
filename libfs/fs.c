@@ -442,23 +442,26 @@ int fs_lseek(int fd, size_t offset)
 	}
 	// printf("offset changed to: %zu\n", offset);
 	fd_table.files[fd].offset = offset;
+	// printf("Filename: %s ------> Offset: %ld\n", fd_table.files[fd].filename, offset);
 	return 0;
 }
 
 uint16_t get_first_data_block_index(int fd)
 {
 	char* filename = fd_table.files[fd].filename;
-	// printf("get_first data filename: %s\n", filename);
+	// printf(" $$$$$$$$$$ get_first data filename: %s\n", filename);
 	for( int i = 0; i < FS_FILE_MAX_COUNT; i++)
 	{
-		// printf("root_dir filename: %s\n", root_dir.root_dir_entries[i].filename);
+		// printf(" root_dir filename: %s\n", root_dir.root_dir_entries[i].filename);
 		if(strcmp(root_dir.root_dir_entries[i].filename, filename) == 0)
 		{
-			// printf("get_first_data_block_index filename: %s\n", fd_table.files[fd].filename);
-			// printf("fd: %d, file: %s, size: %d, data_blk: %d\n", fd, root_dir.root_dir_entries[i].filename, root_dir.root_dir_entries[i].size, root_dir.root_dir_entries[i].first_datablock_index);
+			// printf("  get_first_data_block_index filename: %s\n", fd_table.files[fd].filename);
+			// printf("  fd: %d, file: %s, size: %d, data_blk: %d\n", fd, root_dir.root_dir_entries[i].filename, root_dir.root_dir_entries[i].size, root_dir.root_dir_entries[i].first_datablock_index);
+			// printf(" sb.data_block_start_index: [ %d  ]\n", sb.data_block_start_index);
 			return root_dir.root_dir_entries[i].first_datablock_index + sb.data_block_start_index;
 		}
 	}
+	return -1;
 }
 
 uint16_t get_last_data_block_index(int fd)
@@ -466,20 +469,21 @@ uint16_t get_last_data_block_index(int fd)
 	char* filename = fd_table.files[fd].filename;
 	for(int i = 0; i< FS_FILE_MAX_COUNT; i++)
 	{
-		//printf("........comparing: %s | %s\n", root_dir.root_dir_entries[i].filename, filename);
+		// printf("........comparing: %s | %s at [%d]\n", root_dir.root_dir_entries[i].filename, filename, i);
 		if(strcmp(root_dir.root_dir_entries[i].filename, filename) == 0)
 		{
 			uint16_t index =  root_dir.root_dir_entries[i].first_datablock_index;
+			// printf("index: %d\n", index);
 			uint16_t next = FAT[index];
 			while(next != FAT_EOC)
 			{
-				//printf("index: %d\n", index);
 				index = next;
 				next = FAT[index];
 			}
 			return index + sb.data_block_start_index;
 		}
 	}
+	return -1;
 }
 
 uint16_t allocate_newblock(int fd)
@@ -489,14 +493,17 @@ uint16_t allocate_newblock(int fd)
 	/* Skip FAT[0] because it is always FAT_EOC */
 	for (FAT_idx = 1; FAT_idx < sb.data_blocks_count; FAT_idx++)
 	{
-		if(FAT[FAT_idx] == 0)
+		if(FAT[FAT_idx] == 0)		//found empty and free data block
 		{
 			FAT[FAT_idx] = FAT_EOC;
 			for(int i = 0; i < root_dir.total_opened; i++)
 			{
 				if(strcmp(root_dir.root_dir_entries[i].filename, fd_table.files[fd].filename) == 0)
 				{
-					root_dir.root_dir_entries[i].first_datablock_index = FAT_idx;
+					if(root_dir.root_dir_entries[i].size > 0)
+						FAT[get_last_data_block_index(fd) - sb.data_block_start_index] = FAT_idx;
+					else
+						root_dir.root_dir_entries[i].first_datablock_index = FAT_idx;
 					break;
 				}
 			}
@@ -564,7 +571,7 @@ int fs_write(int fd, void *buf, size_t count)
 		
 		// printf("block_index: %d\n", block_index);
 		// printf("From fs_write: block read to bounce_buffer from %d:\n", block_index);
-		// for (int i = 0; i < 20; i++) {
+		// for (int i = 0; i < 48; i++) {
 		// 	printf("%02x ", ((unsigned char*)bounce_buffer)[i]);
 		// 	if ((i + 1) % 16 == 0) printf("\n"); // print a newline every 16 bytes
 		// }
@@ -575,11 +582,12 @@ int fs_write(int fd, void *buf, size_t count)
 			available_space = count - bytes_written;
 		
 		memcpy(bounce_buffer + offset_in_block, buf + bytes_written, available_space);
+		// printf("block_index: %d\n", block_index);
 		// printf("offset_in_block: %zu\n", offset_in_block);
 		// printf("bytes_written: %zu\n", bytes_written);
 		// printf("available_space: %zu\n", available_space);
 		// printf("From fs_write: bounce_buffer content:\n");
-		// for (int i = 0; i < 20; i++) {
+		// for (int i = 0; i < 16*2; i++) {
 		// 	printf("%02x ", ((unsigned char*)bounce_buffer)[i]);
 		// 	if ((i + 1) % 16 == 0) printf("\n"); // print a newline every 16 bytes
 		// }
@@ -628,35 +636,47 @@ int fs_read(int fd, void *buf, size_t count)
 	if(fd_table.files[fd].filename[0] == '\0')
 		return -1;
 
-	char *filename = fd_table.files[fd].filename;
+	// char *filename = fd_table.files[fd].filename;
 	size_t offset = fd_table.files[fd].offset;
 	// printf("OFFSET: %ld\n", offset);
 
-
 	int file_size = fs_stat(fd);
 
-	int remaining_size = file_size - offset;
-	int bytes_to_read = 0;
+	int remaining_size = file_size - offset; //remaining bytes across all data blocks
+	int bytes_to_read = 0; 
 	if((int) count < remaining_size)
 		bytes_to_read = count;
 	else
 		bytes_to_read = remaining_size;
 	uint16_t data_block_index = get_first_data_block_index(fd);
+	// printf(">>>>>The reading of data_block_index: %d\n", data_block_index);
+	//offset/BLOCK_SIZE = how many blocks we need to move forward from the initial
+	size_t block_inc = 0;
+	// printf("offset/BLOCK_SIZE: %ld\n", offset/BLOCK_SIZE);
+	while(block_inc < offset/BLOCK_SIZE)
+	{
+		data_block_index = FAT[data_block_index];
+		block_inc++;
+		// printf("Iterating the data_block_index: [%d]\n", data_block_index);
+	}
+	//if the offset is past 4095 -> we would be reading not the first data block
 	int bytes_read = 0; // tracking the amount of bytes read into @buf
-	printf("%s: @ %ld\n", filename, offset);
-	printf("count: %ld\n", count);
-	printf("filesize: %d\n", file_size);
-	printf("remaining_size: %d\n", remaining_size);
-	printf("bytes_to_read: %d\n", bytes_to_read);
-	printf("data_block_index: %d\n", data_block_index);
+	// printf("%s: @ %ld\n", filename, offset);
+	// printf("count: %ld\n", count);
+	// printf("filesize: %d\n", file_size);
+	// printf("remaining_size: %d\n", remaining_size);
+	// printf("bytes_to_read: %d\n", bytes_to_read);
+	// printf("data_block_index: %d\n", data_block_index);
+	// printf("block_inc: %ld | %ld\n", block_inc, offset/BLOCK_SIZE);
 
 	while(bytes_to_read > 0 && data_block_index != FAT_EOC)
 	{
+		// printf(".....bytes_read: %d\n", bytes_read);
 		void *bounce_buffer = malloc(BLOCK_SIZE);
 
-		if(block_read(data_block_index, bounce_buffer) == -1)
+		if(block_read(data_block_index, bounce_buffer) == -1) 
 			return -1;
-		// printf("block_read to bounce_buffer: \n");
+		// printf("block_read to bounce_buffer at block[%d], offset[%ld]: \n", data_block_index, offset);
 		// for (int i = 0; i < 20; i++) {
 		// 	printf("%02x ", ((unsigned char*)bounce_buffer)[i]);
 		// 	if ((i + 1) % 16 == 0) printf("\n"); // print a newline every 16 bytes
@@ -665,13 +685,13 @@ int fs_read(int fd, void *buf, size_t count)
 		int block_offset = offset % BLOCK_SIZE;	//offset goes from [0, size_of_file in bytes] % BLOCK_SIZE -> choosing which data block 
 		int block_bytes_to_read = BLOCK_SIZE - block_offset; // checking if there is more than or less than (bytes_to_read)
 		int copy_size = 0;
-		if(bytes_to_read < block_bytes_to_read)
+		if(bytes_to_read < block_bytes_to_read) //interesting 
 			copy_size = bytes_to_read;
 		else
 			copy_size = block_bytes_to_read;
+		// printf("copy_size: %d\n", copy_size);
 
-        memcpy((char*)buf + bytes_read, (char*)bounce_buffer + block_offset, copy_size);
-		printf("copy_size: %d\n", copy_size);
+        memcpy(buf + bytes_read, bounce_buffer + block_offset, copy_size);
 		offset += copy_size;
 		bytes_read += copy_size;
 		bytes_to_read -= copy_size;

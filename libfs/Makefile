@@ -1,7 +1,7 @@
 # Target library
 lib := libfs.a
 CC := gcc
-CFLAGS := -Wextra
+CFLAGS := -Wall -Wextra -Werror
 
 #I need to add this later 
 # CFLAGS += -Wall -Werror

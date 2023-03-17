@@ -543,6 +543,9 @@ int fs_write(int fd, void *buf, size_t count)
 	if(fd_table.files[fd].filename[0] == '\0')
 		return -1;
 
+	if(count == 0)
+		return 0;
+
 	struct file f = fd_table.files[fd];
 
 	// uint16_t block_index = get_first_data_block_index(fd);
